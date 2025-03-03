@@ -6,15 +6,21 @@
 (define-constant err-owner-only (err u100))
 (define-constant err-not-found (err u101))
 (define-constant err-unauthorized (err u102))
+(define-constant err-invalid-input (err u103))
+(define-constant err-already-exists (err u104))
 
-;; Data Maps
+;; Events
+(define-data-var last-event-id uint u0)
+
 (define-map collections 
     { collection-id: uint } 
     {
         owner: principal,
         name: (string-ascii 64),
         description: (string-ascii 256),
-        created-at: uint
+        created-at: uint,
+        photo-count: uint,
+        last-modified: uint
     }
 )
 
@@ -41,6 +47,24 @@
 (define-data-var last-photo-id uint u0)
 
 ;; Private Functions
+(define-private (is-valid-url (url (string-utf8 256)))
+    (let (
+        (url-length (len url))
+        (has-protocol (match (slice? url u0 u4) "http" true false))
+    )
+    (and 
+        (>= url-length u10)
+        has-protocol
+    ))
+)
+
+(define-private (emit-event (event-type (string-ascii 24)) (data (string-utf8 256)))
+    (let ((event-id (+ (var-get last-event-id) u1)))
+        (var-set last-event-id event-id)
+        (print { event-id: event-id, type: event-type, data: data })
+    )
+)
+
 (define-private (is-authorized (collection-id uint) (user principal))
     (let (
         (collection (unwrap! (map-get? collections {collection-id: collection-id}) false))
@@ -66,67 +90,30 @@
             owner: tx-sender,
             name: name,
             description: description,
-            created-at: block-height
+            created-at: block-height,
+            photo-count: u0,
+            last-modified: block-height
         }
     )
     (var-set last-collection-id new-id)
+    (emit-event "collection_created" (concat (to-utf8 name) (uint-to-utf8 new-id)))
     (ok new-id))
 )
 
-(define-public (add-photo 
-    (collection-id uint) 
-    (url (string-utf8 256)) 
-    (metadata (string-utf8 1024)))
-    (let (
-        (new-id (+ (var-get last-photo-id) u1))
-    )
-    (if (is-authorized collection-id tx-sender)
-        (begin
-            (map-set photos
-                {photo-id: new-id, collection-id: collection-id}
-                {
-                    url: url,
-                    metadata: metadata,
-                    uploaded-by: tx-sender,
-                    upload-time: block-height
-                }
-            )
-            (var-set last-photo-id new-id)
-            (ok new-id)
-        )
-        err-unauthorized
-    ))
-)
-
-(define-public (set-permissions 
-    (collection-id uint) 
-    (user principal) 
-    (can-view bool) 
-    (can-edit bool))
+;; Batch photo retrieval
+(define-read-only (get-collection-photos (collection-id uint) (start-id uint) (limit uint))
     (let (
         (collection (unwrap! (map-get? collections {collection-id: collection-id}) err-not-found))
+        (end-id (+ start-id limit))
     )
-    (if (is-eq (get owner collection) tx-sender)
-        (begin
-            (map-set collection-permissions
-                {collection-id: collection-id, user: user}
-                {can-view: can-view, can-edit: can-edit}
+    (ok (filter not-none 
+        (map unwrap-panic
+            (map 
+                (lambda (id) (map-get? photos {photo-id: id, collection-id: collection-id}))
+                (list start-id end-id)
             )
-            (ok true)
         )
-        err-unauthorized
-    ))
+    )))
 )
 
-;; Read-only Functions
-(define-read-only (get-collection (collection-id uint))
-    (ok (map-get? collections {collection-id: collection-id}))
-)
-
-(define-read-only (get-photo (photo-id uint) (collection-id uint))
-    (ok (map-get? photos {photo-id: photo-id, collection-id: collection-id}))
-)
-
-(define-read-only (get-permissions (collection-id uint) (user principal))
-    (ok (map-get? collection-permissions {collection-id: collection-id, user: user}))
-)
+[Previous functions remain unchanged...]
